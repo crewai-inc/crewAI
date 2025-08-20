@@ -4,7 +4,7 @@ import io
 import logging
 import os
 import shutil
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Union
 
 import chromadb
 import chromadb.errors
@@ -13,10 +13,12 @@ from chromadb.api.types import OneOrMany
 from chromadb.config import Settings
 
 from crewai.knowledge.storage.base_knowledge_storage import BaseKnowledgeStorage
-from crewai.utilities import EmbeddingConfigurator
+from crewai.rag.embeddings.configurator import EmbeddingConfigurator
+from crewai.utilities.chromadb import sanitize_collection_name
 from crewai.utilities.constants import KNOWLEDGE_DIRECTORY
 from crewai.utilities.logger import Logger
 from crewai.utilities.paths import db_storage_path
+from crewai.utilities.chromadb import create_persistent_client
 
 
 @contextlib.contextmanager
@@ -48,11 +50,11 @@ class KnowledgeStorage(BaseKnowledgeStorage):
 
     def __init__(
         self,
-        embedder_config: Optional[Dict[str, Any]] = None,
+        embedder: Optional[Dict[str, Any]] = None,
         collection_name: Optional[str] = None,
     ):
         self.collection_name = collection_name
-        self._set_embedder_config(embedder_config)
+        self._set_embedder_config(embedder)
 
     def search(
         self,
@@ -76,20 +78,17 @@ class KnowledgeStorage(BaseKnowledgeStorage):
                         "context": fetched["documents"][0][i],  # type: ignore
                         "score": fetched["distances"][0][i],  # type: ignore
                     }
-                    if result["score"] >= score_threshold:  # type: ignore
+                    if result["score"] >= score_threshold:
                         results.append(result)
                 return results
             else:
                 raise Exception("Collection not initialized")
 
     def initialize_knowledge_storage(self):
-        base_path = os.path.join(db_storage_path(), "knowledge")
-        chroma_client = chromadb.PersistentClient(
-            path=base_path,
+        self.app = create_persistent_client(
+            path=os.path.join(db_storage_path(), "knowledge"),
             settings=Settings(allow_reset=True),
         )
-
-        self.app = chroma_client
 
         try:
             collection_name = (
@@ -99,7 +98,8 @@ class KnowledgeStorage(BaseKnowledgeStorage):
             )
             if self.app:
                 self.collection = self.app.get_or_create_collection(
-                    name=collection_name, embedding_function=self.embedder_config
+                    name=sanitize_collection_name(collection_name),
+                    embedding_function=self.embedder,
                 )
             else:
                 raise Exception("Vector Database Client not initialized")
@@ -109,9 +109,8 @@ class KnowledgeStorage(BaseKnowledgeStorage):
     def reset(self):
         base_path = os.path.join(db_storage_path(), KNOWLEDGE_DIRECTORY)
         if not self.app:
-            self.app = chromadb.PersistentClient(
-                path=base_path,
-                settings=Settings(allow_reset=True),
+            self.app = create_persistent_client(
+                path=base_path, settings=Settings(allow_reset=True)
             )
 
         self.app.reset()
@@ -187,17 +186,15 @@ class KnowledgeStorage(BaseKnowledgeStorage):
             api_key=os.getenv("OPENAI_API_KEY"), model_name="text-embedding-3-small"
         )
 
-    def _set_embedder_config(
-        self, embedder_config: Optional[Dict[str, Any]] = None
-    ) -> None:
+    def _set_embedder_config(self, embedder: Optional[Dict[str, Any]] = None) -> None:
         """Set the embedding configuration for the knowledge storage.
 
         Args:
             embedder_config (Optional[Dict[str, Any]]): Configuration dictionary for the embedder.
                 If None or empty, defaults to the default embedding function.
         """
-        self.embedder_config = (
-            EmbeddingConfigurator().configure_embedder(embedder_config)
-            if embedder_config
+        self.embedder = (
+            EmbeddingConfigurator().configure_embedder(embedder)
+            if embedder
             else self._create_default_embedding_function()
         )

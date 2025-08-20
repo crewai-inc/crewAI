@@ -2,19 +2,23 @@ from importlib.metadata import version as get_version
 from typing import Optional
 
 import click
-
+from crewai.cli.config import Settings
+from crewai.cli.settings.main import SettingsCommand
 from crewai.cli.add_crew_to_flow import add_crew_to_flow
 from crewai.cli.create_crew import create_crew
 from crewai.cli.create_flow import create_flow
+from crewai.cli.crew_chat import run_chat
 from crewai.memory.storage.kickoff_task_outputs_storage import (
     KickoffTaskOutputsSQLiteStorage,
 )
 
 from .authentication.main import AuthenticationCommand
 from .deploy.main import DeployCommand
+from .enterprise.main import EnterpriseConfigureCommand
 from .evaluate_crew import evaluate_crew
 from .install_crew import install_crew
 from .kickoff_flow import kickoff_flow
+from .organization.main import OrganizationCommand
 from .plot_flow import plot_flow
 from .replay_from_task import replay_task_command
 from .reset_memories_command import reset_memories_command
@@ -137,10 +141,10 @@ def log_tasks_outputs() -> None:
 @click.option("-e", "--entities", is_flag=True, help="Reset ENTITIES memory")
 @click.option("-kn", "--knowledge", is_flag=True, help="Reset KNOWLEDGE storage")
 @click.option(
-    "-k",
-    "--kickoff-outputs",
-    is_flag=True,
-    help="Reset LATEST KICKOFF TASK OUTPUTS",
+    "-akn", "--agent-knowledge", is_flag=True, help="Reset AGENT KNOWLEDGE storage"
+)
+@click.option(
+    "-k", "--kickoff-outputs", is_flag=True, help="Reset LATEST KICKOFF TASK OUTPUTS"
 )
 @click.option("-a", "--all", is_flag=True, help="Reset ALL memories")
 def reset_memories(
@@ -149,18 +153,30 @@ def reset_memories(
     entities: bool,
     knowledge: bool,
     kickoff_outputs: bool,
+    agent_knowledge: bool,
     all: bool,
 ) -> None:
     """
-    Reset the crew memories (long, short, entity, latest_crew_kickoff_ouputs). This will delete all the data saved.
+    Reset the crew memories (long, short, entity, latest_crew_kickoff_ouputs, knowledge, agent_knowledge). This will delete all the data saved.
     """
     try:
-        if not all and not (long or short or entities or knowledge or kickoff_outputs):
+        memory_types = [
+            long,
+            short,
+            entities,
+            knowledge,
+            agent_knowledge,
+            kickoff_outputs,
+            all,
+        ]
+        if not any(memory_types):
             click.echo(
                 "Please specify at least one memory type to reset using the appropriate flags."
             )
             return
-        reset_memories_command(long, short, entities, knowledge, kickoff_outputs, all)
+        reset_memories_command(
+            long, short, entities, knowledge, agent_knowledge, kickoff_outputs, all
+        )
     except Exception as e:
         click.echo(f"An error occurred while resetting memories: {e}", err=True)
 
@@ -201,7 +217,6 @@ def install(context):
 @crewai.command()
 def run():
     """Run the Crew."""
-    click.echo("Running the Crew")
     run_crew()
 
 
@@ -212,15 +227,10 @@ def update():
 
 
 @crewai.command()
-def signup():
-    """Sign Up/Login to CrewAI+."""
-    AuthenticationCommand().signup()
-
-
-@crewai.command()
 def login():
-    """Sign Up/Login to CrewAI+."""
-    AuthenticationCommand().signup()
+    """Sign Up/Login to CrewAI Enterprise."""
+    Settings().clear_user_settings()
+    AuthenticationCommand().login()
 
 
 # DEPLOY CREWAI+ COMMANDS
@@ -340,6 +350,90 @@ def flow_add_crew(crew_name):
     """Add a crew to an existing flow."""
     click.echo(f"Adding crew {crew_name} to the flow")
     add_crew_to_flow(crew_name)
+
+
+@crewai.command()
+def chat():
+    """
+    Start a conversation with the Crew, collecting user-supplied inputs,
+    and using the Chat LLM to generate responses.
+    """
+    click.secho(
+        "\nStarting a conversation with the Crew\n" "Type 'exit' or Ctrl+C to quit.\n",
+    )
+
+    run_chat()
+
+
+@crewai.group(invoke_without_command=True)
+def org():
+    """Organization management commands."""
+    pass
+
+
+@org.command("list")
+def org_list():
+    """List available organizations."""
+    org_command = OrganizationCommand()
+    org_command.list()
+
+
+@org.command()
+@click.argument("id")
+def switch(id):
+    """Switch to a specific organization."""
+    org_command = OrganizationCommand()
+    org_command.switch(id)
+
+
+@org.command()
+def current():
+    """Show current organization when 'crewai org' is called without subcommands."""
+    org_command = OrganizationCommand()
+    org_command.current()
+
+
+@crewai.group()
+def enterprise():
+    """Enterprise Configuration commands."""
+    pass
+
+
+@enterprise.command("configure")
+@click.argument("enterprise_url")
+def enterprise_configure(enterprise_url: str):
+    """Configure CrewAI Enterprise OAuth2 settings from the provided Enterprise URL."""
+    enterprise_command = EnterpriseConfigureCommand()
+    enterprise_command.configure(enterprise_url)
+
+
+@crewai.group()
+def config():
+    """CLI Configuration commands."""
+    pass
+
+
+@config.command("list")
+def config_list():
+    """List all CLI configuration parameters."""
+    config_command = SettingsCommand()
+    config_command.list()
+
+
+@config.command("set")
+@click.argument("key")
+@click.argument("value")
+def config_set(key: str, value: str):
+    """Set a CLI configuration parameter."""
+    config_command = SettingsCommand()
+    config_command.set(key, value)
+
+
+@config.command("reset")
+def config_reset():
+    """Reset all CLI configuration parameters to default values."""
+    config_command = SettingsCommand()
+    config_command.reset_all_settings()
 
 
 if __name__ == "__main__":
